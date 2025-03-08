@@ -1,4 +1,7 @@
-# OctoPrint GPIO Control
+# OctoPrint GPIO Control mod
+
+This mod adds the option for external switches. Please note that this is by no means pretty, refined or a finished product but should infact just work because I needed this function. This mod does not work for toggle switches.
+- Leo Aqua
 
 GPIO Control adds a sidebar with on/off buttons. You can add as many buttons as you want that will control each device connected to your Raspberry Pi.
 
