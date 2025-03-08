@@ -6,6 +6,8 @@ import octoprint.plugin
 import flask
 import RPi.GPIO as GPIO
 
+from time import sleep
+
 
 class GpioControlPlugin(
     octoprint.plugin.StartupPlugin,
@@ -19,13 +21,10 @@ class GpioControlPlugin(
 
     def on_startup(self, *args, **kwargs):
         GPIO.setwarnings(False)
-
         self.mode = GPIO.getmode()
-
         if self.mode is None:
             self.mode = GPIO.BCM
             GPIO.setmode(self.mode)
-
         self._logger.info("Detected GPIO mode: {}".format(self.mode))
 
     def get_template_configs(self):
@@ -49,6 +48,7 @@ class GpioControlPlugin(
         return dict(gpio_configurations=[])
 
     def on_settings_save(self, data):
+        # Clean up existing pin configurations
         for configuration in self._settings.get(["gpio_configurations"]):
             self._logger.info(
                 "Cleaned GPIO{}: {},{} ({})".format(
@@ -58,14 +58,28 @@ class GpioControlPlugin(
                     configuration["name"],
                 )
             )
-
             pin = self.get_pin_number(int(configuration["pin"]))
-
             if pin > 0:
                 GPIO.cleanup(pin)
 
+            # Handle external switch cleanup
+            external_switch = configuration.get("external_switch", "none")
+            switch_pin = self.get_pin_number(int(configuration.get("switch_pin", -1)))
+            if external_switch != "none" and switch_pin > 0:
+                # Remove any existing event detection on the switch pin
+                try:
+                    GPIO.remove_event_detect(switch_pin)
+                except RuntimeError:
+                    pass  # Event not added yet
+                # Set up the external switch input
+                if external_switch == "normally_open":
+                    GPIO.setup(switch_pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+                elif external_switch == "normally_closed":
+                    GPIO.setup(switch_pin, GPIO.IN, pull_up_down=GPIO.PUD_DOWN)
+
         octoprint.plugin.SettingsPlugin.on_settings_save(self, data)
 
+        # Reconfigure GPIO outputs
         for configuration in self._settings.get(["gpio_configurations"]):
             self._logger.info(
                 "Reconfigured GPIO{}: {},{} ({})".format(
@@ -75,12 +89,9 @@ class GpioControlPlugin(
                     configuration["name"],
                 )
             )
-
             pin = self.get_pin_number(int(configuration["pin"]))
-
             if pin > 0:
                 GPIO.setup(pin, GPIO.OUT)
-
                 if configuration["active_mode"] == "active_low":
                     if configuration["default_state"] == "default_on":
                         GPIO.output(pin, GPIO.LOW)
@@ -91,6 +102,20 @@ class GpioControlPlugin(
                         GPIO.output(pin, GPIO.HIGH)
                     elif configuration["default_state"] == "default_off":
                         GPIO.output(pin, GPIO.LOW)
+
+        # Add event detection for external switches
+        for index, configuration in enumerate(
+            self._settings.get(["gpio_configurations"])
+        ):
+            external_switch = configuration.get("external_switch", "none")
+            switch_pin = self.get_pin_number(int(configuration.get("switch_pin", -1)))
+            if external_switch != "none" and switch_pin > 0:
+                GPIO.add_event_detect(
+                    switch_pin,
+                    GPIO.BOTH,
+                    callback=self._switch_callback,
+                    bouncetime=200,
+                )
 
     def on_after_startup(self):
         for configuration in self._settings.get(["gpio_configurations"]):
@@ -102,12 +127,9 @@ class GpioControlPlugin(
                     configuration["name"],
                 )
             )
-
             pin = self.get_pin_number(int(configuration["pin"]))
-
             if pin != -1:
                 GPIO.setup(pin, GPIO.OUT)
-
                 if configuration["active_mode"] == "active_low":
                     if configuration["default_state"] == "default_on":
                         GPIO.output(pin, GPIO.LOW)
@@ -119,6 +141,85 @@ class GpioControlPlugin(
                     elif configuration["default_state"] == "default_off":
                         GPIO.output(pin, GPIO.LOW)
 
+            # Set up external switch input and event detection
+            external_switch = configuration.get("external_switch", "none")
+            switch_pin = self.get_pin_number(int(configuration.get("switch_pin", -1)))
+            if external_switch != "none" and switch_pin > 0:
+                if external_switch == "normally_open":
+                    GPIO.setup(switch_pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+                elif external_switch == "normally_closed":
+                    GPIO.setup(switch_pin, GPIO.IN, pull_up_down=GPIO.PUD_DOWN)
+                GPIO.add_event_detect(
+                    switch_pin,
+                    GPIO.BOTH,
+                    callback=self._switch_callback,
+                    bouncetime=200,
+                )
+
+    def _switch_callback(self, channel):
+        """
+        This callback is called when an external switch changes state.
+        It looks up the configuration that matches the triggered channel,
+        determines if the switch is activated, and turns on the corresponding
+        GPIO output if needed. A plugin message is also sent so that the UI
+        can update the button state.
+        """
+        self._logger.debug("Switch callback triggered on channel {}".format(channel))
+        for index, configuration in enumerate(
+            self._settings.get(["gpio_configurations"])
+        ):
+            external_switch = configuration.get("external_switch", "none")
+            if external_switch == "none":
+                continue
+
+            switch_pin = self.get_pin_number(int(configuration.get("switch_pin", -1)))
+            if switch_pin != channel:
+                continue
+
+            pin = self.get_pin_number(int(configuration["pin"]))
+            if pin <= 0:
+                continue
+
+            input_state = GPIO.input(channel)
+            activated = False
+
+            # For normally_open: activated when input goes LOW
+            if external_switch == "normally_open" and input_state == GPIO.LOW:
+                activated = True
+            # For normally_closed: activated when input goes HIGH
+            elif external_switch == "normally_closed" and input_state == GPIO.HIGH:
+                activated = True
+
+            if activated:
+                self._logger.debug(
+                    "External switch (pin {}) activated. Turning on GPIO{}".format(
+                        channel, configuration["pin"]
+                    )
+                )
+                if configuration["active_mode"] == "active_low":
+                    if GPIO.input(pin) != GPIO.LOW:
+                        GPIO.output(pin, GPIO.LOW)
+                elif configuration["active_mode"] == "active_high":
+                    if GPIO.input(pin) != GPIO.HIGH:
+                        GPIO.output(pin, GPIO.HIGH)
+                self._plugin_manager.send_plugin_message(
+                    __plugin_name__, {"id": index, "state": "on"}
+                )
+            else:
+                self._logger.debug(
+                    "External switch (pin {}) deactivated. Turning off GPIO{}".format(
+                        channel, configuration["pin"]
+                    )
+                )
+
+                if configuration["active_mode"] == "active_low":
+                    GPIO.output(pin, GPIO.HIGH)
+                elif configuration["active_mode"] == "active_high":
+                    GPIO.output(pin, GPIO.LOW)
+                self._plugin_manager.send_plugin_message(
+                    __plugin_name__, {"id": index, "state": "off"}
+                )
+
     def get_api_commands(self):
         return dict(turnGpioOn=["id"], turnGpioOff=["id"], getGpioState=["id"])
 
@@ -126,6 +227,7 @@ class GpioControlPlugin(
         if not user_permission.can():
             return flask.make_response("Insufficient rights", 403)
 
+        self._logger.info("on_api_command -> data: {}".format(data))
         configuration = self._settings.get(["gpio_configurations"])[int(data["id"])]
         pin = self.get_pin_number(int(configuration["pin"]))
 
@@ -139,7 +241,6 @@ class GpioControlPlugin(
         elif command == "turnGpioOn":
             if pin > 0:
                 self._logger.info("Turned on GPIO{}".format(configuration["pin"]))
-
                 if configuration["active_mode"] == "active_low":
                     GPIO.output(pin, GPIO.LOW)
                 elif configuration["active_mode"] == "active_high":
@@ -147,7 +248,6 @@ class GpioControlPlugin(
         elif command == "turnGpioOff":
             if pin > 0:
                 self._logger.info("Turned off GPIO{}".format(configuration["pin"]))
-
                 if configuration["active_mode"] == "active_low":
                     GPIO.output(pin, GPIO.HIGH)
                 elif configuration["active_mode"] == "active_high":
@@ -155,26 +255,23 @@ class GpioControlPlugin(
 
     def on_api_get(self, request):
         states = []
-
         for configuration in self._settings.get(["gpio_configurations"]):
             pin = self.get_pin_number(int(configuration["pin"]))
-
             if pin < 0:
                 states.append("")
             elif configuration["active_mode"] == "active_low":
                 states.append("off" if GPIO.input(pin) else "on")
             elif configuration["active_mode"] == "active_high":
                 states.append("on" if GPIO.input(pin) else "off")
-
         return flask.jsonify(states)
 
     def get_update_information(self):
         return dict(
             gpiocontrol=dict(
-                displayName="GPIO Control",
+                displayName="GPIO Control mod",
                 displayVersion=self._plugin_version,
                 type="github_release",
-                user="catgiggle",
+                user="Leo-Aqua",
                 repo="OctoPrint-GpioControl",
                 current=self._plugin_version,
                 stable_branch=dict(
@@ -189,20 +286,47 @@ class GpioControlPlugin(
                         comittish=["development", "master"],
                     )
                 ],
-                pip="https://github.com/catgiggle/OctoPrint-GpioControl/archive/{target_version}.zip",
+                pip="https://github.com/Leo-Aqua/OctoPrint-GpioControl/archive/{target_version}.zip",
             )
         )
 
-    PIN_MAPPINGS = [-1, -1, 3, 5, 7, 29, 31, 26, 24, 21, 19, 23, 32, 33, 8, 10, 36, 11, 12, 35, 38, 40, 15, 16, 18, 22, 37, 13]
+    PIN_MAPPINGS = [
+        -1,
+        -1,
+        3,
+        5,
+        7,
+        29,
+        31,
+        26,
+        24,
+        21,
+        19,
+        23,
+        32,
+        33,
+        8,
+        10,
+        36,
+        11,
+        12,
+        35,
+        38,
+        40,
+        15,
+        16,
+        18,
+        22,
+        37,
+        13,
+    ]
 
     def get_pin_number(self, pin):
         if 2 <= pin <= 27:
             if self.mode == GPIO.BCM:
                 return pin
-
             if self.mode == GPIO.BOARD:
                 return self.PIN_MAPPINGS[pin]
-
         return -1
 
 
@@ -213,7 +337,6 @@ __plugin_pythoncompat__ = ">=2.7,<4"
 def __plugin_load__():
     global __plugin_implementation__
     __plugin_implementation__ = GpioControlPlugin()
-
     global __plugin_hooks__
     __plugin_hooks__ = {
         "octoprint.plugin.softwareupdate.check_config": __plugin_implementation__.get_update_information
