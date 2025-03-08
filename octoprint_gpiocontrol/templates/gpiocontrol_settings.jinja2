@@ -36,6 +36,15 @@
                         <option value="default_on">ON</option>
                     </select>
                 </div>
+                <div class="input-prepend span4">
+                    <span class="add-on span6">Ext. Switch</span>
+                    <input type="checkbox" data-bind="checked: external_switch"/>
+                </div>
+                <div class="input-prepend span4" data-bind="visible: external_switch">
+                    <span class="add-on span6">Switch GPIO</span>
+                    <input class="span6" type="number" data-bind="value: switch_pin"/>
+                </div>
+
             </div>
             <div class="span1">
                 <a title="Remove GPIO Configuration" class="btn btn-danger" data-bind="click: $parent.removeGpioConfiguration">
