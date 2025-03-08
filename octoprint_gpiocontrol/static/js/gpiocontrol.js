@@ -37,11 +37,11 @@
                     name: "", 
                     active_mode: "active_high", 
                     default_state: "default_off",
-                    external_switch: false, 
+                    external_switch: "none",  // "none", "normally_open", "normally_closed"
                     switch_pin: 0
                 });
                 self.updateIconPicker();
-            };
+            };            
 
             self.removeGpioConfiguration = function (configuration) {
                 self.gpioConfigurations.remove(configuration);

@@ -38,10 +38,14 @@
                 </div>
                 <div class="input-prepend span4">
                     <span class="add-on span6">Ext. Switch</span>
-                    <input type="checkbox" data-bind="checked: external_switch"/>
+                    <select class="btn-group span6" data-bind="value: external_switch">
+                        <option value="none">None</option>
+                        <option value="normally_open">N.O.</option>
+                        <option value="normally_closed">N.C.</option>
+                    </select>
                 </div>
-                <div class="input-prepend span4" data-bind="visible: external_switch">
-                    <span class="add-on span6">Switch GPIO</span>
+                <div class="input-prepend span4">
+                    <span class="add-on span6">SW GPIO</span>
                     <input class="span6" type="number" data-bind="value: switch_pin"/>
                 </div>
 
