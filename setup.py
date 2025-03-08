@@ -11,23 +11,23 @@ plugin_package = "octoprint_gpiocontrol"
 
 # The plugin's human readable name. Can be overwritten within OctoPrint's internal data via __plugin_name__ in the
 # plugin module
-plugin_name = "OctoPrint-GpioControl"
+plugin_name = "OctoPrint-GpioControl-MOD"
 
 # The plugin's version. Can be overwritten within OctoPrint's internal data via __plugin_version__ in the plugin module
-plugin_version = "1.0.8"
+plugin_version = "1.0.8.1"
 
 # The plugin's description. Can be overwritten within OctoPrint's internal data via __plugin_description__ in the plugin
 # module
-plugin_description = """GPIO Control adds a sidebar with on/off buttons. You can add as many buttons as you want that will control each device connected to your Raspberry Pi."""
+plugin_description = """GPIO Control adds a sidebar with on/off buttons. You can add as many buttons as you want that will control each device connected to your Raspberry Pi. This mod includes external switch support"""
 
 # The plugin's author. Can be overwritten within OctoPrint's internal data via __plugin_author__ in the plugin module
-plugin_author = "Damian Wójcik"
+plugin_author = "Damian Wójcik and Leo Aqua Felix"
 
 # The plugin's author's mail address.
 plugin_author_email = "mr.catgiggle@gmail.com"
 
 # The plugin's homepage URL. Can be overwritten within OctoPrint's internal data via __plugin_url__ in the plugin module
-plugin_url = "https://github.com/catgiggle/OctoPrint-GpioControl"
+plugin_url = "https://github.com/Leo-Aqua/OctoPrint-GpioControl"
 
 # The plugin's license. Can be overwritten within OctoPrint's internal data via __plugin_license__ in the plugin module
 plugin_license = "AGPLv3"
@@ -68,8 +68,10 @@ from setuptools import setup
 try:
     import octoprint_setuptools
 except:
-    print("Could not import OctoPrint's setuptools, are you sure you are running that under "
-          "the same python installation that OctoPrint is installed under?")
+    print(
+        "Could not import OctoPrint's setuptools, are you sure you are running that under "
+        "the same python installation that OctoPrint is installed under?"
+    )
     import sys
 
     sys.exit(-1)
@@ -87,7 +89,7 @@ setup_parameters = octoprint_setuptools.create_plugin_setup_parameters(
     requires=plugin_requires,
     additional_packages=plugin_additional_packages,
     ignored_packages=plugin_ignored_packages,
-    additional_data=plugin_additional_data
+    additional_data=plugin_additional_data,
 )
 
 if len(additional_setup_parameters):
