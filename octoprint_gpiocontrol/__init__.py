@@ -48,7 +48,7 @@ class GpioControlPlugin(
         return dict(gpio_configurations=[])
 
     def on_settings_save(self, data):
-        # Clean up existing pin configurations
+        # Clean up and configure external switch pins
         for configuration in self._settings.get(["gpio_configurations"]):
             self._logger.info(
                 "Cleaned GPIO{}: {},{} ({})".format(
@@ -62,24 +62,26 @@ class GpioControlPlugin(
             if pin > 0:
                 GPIO.cleanup(pin)
 
-            # Handle external switch cleanup
+            # Handle external switch configuration
             external_switch = configuration.get("external_switch", "none")
             switch_pin = self.get_pin_number(int(configuration.get("switch_pin", -1)))
             if external_switch != "none" and switch_pin > 0:
-                # Remove any existing event detection on the switch pin
+                # Remove any previous event detection
                 try:
                     GPIO.remove_event_detect(switch_pin)
                 except RuntimeError:
-                    pass  # Event not added yet
-                # Set up the external switch input
+                    pass  # Ignore if event detect was not set
+
+                # Set up the external switch as an input BEFORE adding event detection
                 if external_switch == "normally_open":
                     GPIO.setup(switch_pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
                 elif external_switch == "normally_closed":
                     GPIO.setup(switch_pin, GPIO.IN, pull_up_down=GPIO.PUD_DOWN)
 
+        # Now save settings
         octoprint.plugin.SettingsPlugin.on_settings_save(self, data)
 
-        # Reconfigure GPIO outputs
+        # Now configure GPIO outputs
         for configuration in self._settings.get(["gpio_configurations"]):
             self._logger.info(
                 "Reconfigured GPIO{}: {},{} ({})".format(
@@ -103,18 +105,25 @@ class GpioControlPlugin(
                     elif configuration["default_state"] == "default_off":
                         GPIO.output(pin, GPIO.LOW)
 
-        # Add event detection for external switches
+        # Finally, add event detection for external switches (now that they’re set up as inputs)
         for index, configuration in enumerate(
             self._settings.get(["gpio_configurations"])
         ):
             external_switch = configuration.get("external_switch", "none")
             switch_pin = self.get_pin_number(int(configuration.get("switch_pin", -1)))
             if external_switch != "none" and switch_pin > 0:
+                # Make sure the switch pin is properly set up before adding event detection
+                if external_switch == "normally_open":
+                    GPIO.setup(switch_pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+                elif external_switch == "normally_closed":
+                    GPIO.setup(switch_pin, GPIO.IN, pull_up_down=GPIO.PUD_DOWN)
+
+                # Add event detection for both rising and falling edges
                 GPIO.add_event_detect(
                     switch_pin,
                     GPIO.BOTH,
                     callback=self._switch_callback,
-                    bouncetime=200,
+                    bouncetime=50,  # Debounce time to avoid rapid triggering
                 )
 
     def on_after_startup(self):
@@ -127,6 +136,7 @@ class GpioControlPlugin(
                     configuration["name"],
                 )
             )
+            # Configure output pins
             pin = self.get_pin_number(int(configuration["pin"]))
             if pin != -1:
                 GPIO.setup(pin, GPIO.OUT)
@@ -141,7 +151,7 @@ class GpioControlPlugin(
                     elif configuration["default_state"] == "default_off":
                         GPIO.output(pin, GPIO.LOW)
 
-            # Set up external switch input and event detection
+            # Set up external switch input and add event detection
             external_switch = configuration.get("external_switch", "none")
             switch_pin = self.get_pin_number(int(configuration.get("switch_pin", -1)))
             if external_switch != "none" and switch_pin > 0:
@@ -153,7 +163,7 @@ class GpioControlPlugin(
                     switch_pin,
                     GPIO.BOTH,
                     callback=self._switch_callback,
-                    bouncetime=200,
+                    bouncetime=50,
                 )
 
     def _switch_callback(self, channel):
@@ -161,10 +171,10 @@ class GpioControlPlugin(
         This callback is called when an external switch changes state.
         It looks up the configuration that matches the triggered channel,
         determines if the switch is activated, and turns on the corresponding
-        GPIO output if needed. A plugin message is also sent so that the UI
+        GPIO output if needed. It also sends a plugin message so that the UI
         can update the button state.
         """
-        self._logger.debug("Switch callback triggered on channel {}".format(channel))
+        self._logger.info("Switch callback triggered on channel {}".format(channel))
         for index, configuration in enumerate(
             self._settings.get(["gpio_configurations"])
         ):
@@ -191,31 +201,41 @@ class GpioControlPlugin(
                 activated = True
 
             if activated:
-                self._logger.debug(
+                self._logger.info(
                     "External switch (pin {}) activated. Turning on GPIO{}".format(
                         channel, configuration["pin"]
                     )
                 )
+
+                # Only change the pin if it's not already in the desired state
                 if configuration["active_mode"] == "active_low":
                     if GPIO.input(pin) != GPIO.LOW:
                         GPIO.output(pin, GPIO.LOW)
                 elif configuration["active_mode"] == "active_high":
                     if GPIO.input(pin) != GPIO.HIGH:
                         GPIO.output(pin, GPIO.HIGH)
+
                 self._plugin_manager.send_plugin_message(
                     __plugin_name__, {"id": index, "state": "on"}
                 )
             else:
-                self._logger.debug(
-                    "External switch (pin {}) deactivated. Turning off GPIO{}".format(
-                        channel, configuration["pin"]
-                    )
+                self._logger.info(
+                    "External switch (pin {}) deactivated.".format(channel)
                 )
 
+                # Only change the pin if it's not already in the desired state
+                # Optionally, turn off the GPIO when the switch is released:
                 if configuration["active_mode"] == "active_low":
-                    GPIO.output(pin, GPIO.HIGH)
+                    if (
+                        GPIO.input(pin) != GPIO.HIGH
+                    ):  # Prevent overriding if pin is already high
+                        GPIO.output(pin, GPIO.HIGH)
                 elif configuration["active_mode"] == "active_high":
-                    GPIO.output(pin, GPIO.LOW)
+                    if (
+                        GPIO.input(pin) != GPIO.LOW
+                    ):  # Prevent overriding if pin is already low
+                        GPIO.output(pin, GPIO.LOW)
+
                 self._plugin_manager.send_plugin_message(
                     __plugin_name__, {"id": index, "state": "off"}
                 )
@@ -330,7 +350,7 @@ class GpioControlPlugin(
         return -1
 
 
-__plugin_name__ = "GPIO Control"
+__plugin_name__ = "GPIO Control mod"
 __plugin_pythoncompat__ = ">=2.7,<4"
 
 
