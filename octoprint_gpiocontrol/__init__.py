@@ -119,7 +119,9 @@ class GpioControlPlugin(
             switch_pin = int(config.get("switch_pin", -1))
 
             if external_switch != "none" and switch_pin > 0:
-                self._logger.info(f"Configuring external switch on GPIO{switch_pin}")
+                self._logger.info(
+                    f"Configuring external switch on GPIO{switch_pin} as {external_switch}"
+                )
 
                 # Set up pull_up based on switch type
                 pull_up = external_switch == "normally_open"
@@ -128,16 +130,28 @@ class GpioControlPlugin(
                 button = Button(switch_pin, pull_up=pull_up, bounce_time=0.01)
                 self.gpio_buttons[switch_pin] = button
 
+                # For normally open: Active when button is pressed (is_pressed = True)
+                # For normally closed: Active when button is NOT pressed (is_pressed = False)
+                active_state = True if external_switch == "normally_open" else False
+
                 # Store button configuration for polling
                 self.button_states[switch_pin] = {
                     "pin": pin,
                     "index": index,
                     "config": config,
                     "last_state": button.is_pressed,
-                    "active_state": not pull_up,  # Normally open buttons are active when pressed (not pulled up)
+                    "active_state": active_state,
+                    "switch_type": external_switch,
+                    "active": False,  # Track if the switch is currently active (output is on)
                 }
 
                 has_buttons = True
+
+                # Log the initial button state
+                self._logger.info(
+                    f"Button {switch_pin} initial state: {button.is_pressed}, "
+                    + f"active when: {active_state}, type: {external_switch}"
+                )
 
         # Start polling thread if we have buttons
         if has_buttons:
@@ -175,35 +189,49 @@ class GpioControlPlugin(
                 current_state = button.is_pressed
                 last_state = button_data["last_state"]
 
-                # Check if state changed
+                # Check if physical state changed
                 if current_state != last_state:
-                    self._logger.debug(
-                        f"Button {switch_pin} state changed: {last_state} -> {current_state}"
-                    )
-
                     # Update stored state
                     self.button_states[switch_pin]["last_state"] = current_state
 
-                    # If button is in active state (pressed for normally open, released for normally closed)
-                    if current_state == button_data["active_state"]:
-                        self._button_pressed(
-                            button_data["pin"],
-                            button_data["index"],
-                            button_data["config"],
-                        )
-                    else:
-                        self._button_released(
-                            button_data["pin"],
-                            button_data["index"],
-                            button_data["config"],
-                        )
+                    # Debug log with detailed info
+                    self._logger.debug(
+                        f"Button {switch_pin} state changed: {last_state} -> {current_state}, "
+                        + f"type: {button_data['switch_type']}, active_state: {button_data['active_state']}"
+                    )
+
+                    # Check if the button is now in its active state
+                    is_active = current_state == button_data["active_state"]
+
+                    # Only trigger events if active status changed
+                    if is_active != button_data["active"]:
+                        self.button_states[switch_pin]["active"] = is_active
+
+                        if is_active:
+                            self._logger.info(
+                                f"Button {switch_pin} ({button_data['switch_type']}) activated"
+                            )
+                            self._button_pressed(
+                                button_data["pin"],
+                                button_data["index"],
+                                button_data["config"],
+                            )
+                        else:
+                            self._logger.info(
+                                f"Button {switch_pin} ({button_data['switch_type']}) deactivated"
+                            )
+                            self._button_released(
+                                button_data["pin"],
+                                button_data["index"],
+                                button_data["config"],
+                            )
 
             # Poll at 20ms interval (50Hz) for responsiveness
             sleep(0.02)
 
     def _button_pressed(self, pin, index, config):
         """Handle button press event"""
-        self._logger.info(f"External switch pressed for GPIO{pin}")
+        self._logger.info(f"External switch activated for GPIO{pin}")
 
         # Turn on the output
         if pin in self.gpio_outputs:
@@ -216,7 +244,7 @@ class GpioControlPlugin(
 
     def _button_released(self, pin, index, config):
         """Handle button release event"""
-        self._logger.info(f"External switch released for GPIO{pin}")
+        self._logger.info(f"External switch deactivated for GPIO{pin}")
 
         # Turn off the output
         if pin in self.gpio_outputs:
