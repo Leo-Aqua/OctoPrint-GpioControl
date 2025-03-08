@@ -5,6 +5,7 @@ from octoprint.server import user_permission
 import octoprint.plugin
 import flask
 from gpiozero import LED, Button
+import threading
 from time import sleep
 
 
@@ -19,6 +20,9 @@ class GpioControlPlugin(
     def __init__(self):
         self.gpio_outputs = {}  # Dictionary to store LED objects
         self.gpio_buttons = {}  # Dictionary to store Button objects
+        self.button_poll_thread = None
+        self.button_poll_active = False
+        self.button_states = {}  # Track button states for polling
 
     def on_startup(self, *args, **kwargs):
         self._logger.info("GPIO Control initializing using GPIOZero")
@@ -61,6 +65,9 @@ class GpioControlPlugin(
 
     def _cleanup_gpios(self, configurations):
         """Clean up and close GPIO devices"""
+        # Stop button polling thread if active
+        self.stop_button_polling()
+
         for config in configurations:
             pin = int(config["pin"])
             if pin in self.gpio_outputs:
@@ -77,6 +84,9 @@ class GpioControlPlugin(
 
     def _configure_gpios(self, configurations):
         """Configure GPIO outputs and inputs based on settings"""
+        has_buttons = False
+        self.button_states = {}  # Reset button states
+
         for index, config in enumerate(configurations):
             pin = int(config["pin"])
             if pin < 0:
@@ -114,18 +124,82 @@ class GpioControlPlugin(
                 # Set up pull_up based on switch type
                 pull_up = external_switch == "normally_open"
 
-                # Create Button object with appropriate callback
-                button = Button(switch_pin, pull_up=pull_up, bounce_time=0.05)
-
-                # Configure button callbacks
-                button.when_pressed = (
-                    lambda p=pin, i=index, c=config: self._button_pressed(p, i, c)
-                )
-                button.when_released = (
-                    lambda p=pin, i=index, c=config: self._button_released(p, i, c)
-                )
-
+                # Create Button object for input detection
+                button = Button(switch_pin, pull_up=pull_up, bounce_time=0.01)
                 self.gpio_buttons[switch_pin] = button
+
+                # Store button configuration for polling
+                self.button_states[switch_pin] = {
+                    "pin": pin,
+                    "index": index,
+                    "config": config,
+                    "last_state": button.is_pressed,
+                    "active_state": not pull_up,  # Normally open buttons are active when pressed (not pulled up)
+                }
+
+                has_buttons = True
+
+        # Start polling thread if we have buttons
+        if has_buttons:
+            self.start_button_polling()
+
+    def start_button_polling(self):
+        """Start a thread to poll button states continuously"""
+        if self.button_poll_thread is not None and self.button_poll_thread.is_alive():
+            return
+
+        self.button_poll_active = True
+        self.button_poll_thread = threading.Thread(target=self._poll_buttons)
+        self.button_poll_thread.daemon = True
+        self.button_poll_thread.start()
+        self._logger.info("Button polling thread started")
+
+    def stop_button_polling(self):
+        """Stop the button polling thread"""
+        if self.button_poll_thread is not None:
+            self.button_poll_active = False
+            self.button_poll_thread.join(timeout=1.0)
+            self.button_poll_thread = None
+            self._logger.info("Button polling thread stopped")
+
+    def _poll_buttons(self):
+        """Poll button states at a high frequency to detect changes quickly"""
+        self._logger.info("Button polling thread running")
+
+        while self.button_poll_active:
+            for switch_pin, button_data in self.button_states.items():
+                if switch_pin not in self.gpio_buttons:
+                    continue
+
+                button = self.gpio_buttons[switch_pin]
+                current_state = button.is_pressed
+                last_state = button_data["last_state"]
+
+                # Check if state changed
+                if current_state != last_state:
+                    self._logger.debug(
+                        f"Button {switch_pin} state changed: {last_state} -> {current_state}"
+                    )
+
+                    # Update stored state
+                    self.button_states[switch_pin]["last_state"] = current_state
+
+                    # If button is in active state (pressed for normally open, released for normally closed)
+                    if current_state == button_data["active_state"]:
+                        self._button_pressed(
+                            button_data["pin"],
+                            button_data["index"],
+                            button_data["config"],
+                        )
+                    else:
+                        self._button_released(
+                            button_data["pin"],
+                            button_data["index"],
+                            button_data["config"],
+                        )
+
+            # Poll at 20ms interval (50Hz) for responsiveness
+            sleep(0.02)
 
     def _button_pressed(self, pin, index, config):
         """Handle button press event"""
