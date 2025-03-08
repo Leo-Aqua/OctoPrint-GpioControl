@@ -14,7 +14,7 @@ plugin_package = "octoprint_gpiocontrol"
 plugin_name = "OctoPrint-GpioControl-MOD"
 
 # The plugin's version. Can be overwritten within OctoPrint's internal data via __plugin_version__ in the plugin module
-plugin_version = "1.0.8.2"
+plugin_version = "1.0.8.3"
 
 # The plugin's description. Can be overwritten within OctoPrint's internal data via __plugin_description__ in the plugin
 # module
@@ -33,7 +33,7 @@ plugin_url = "https://github.com/Leo-Aqua/OctoPrint-GpioControl"
 plugin_license = "AGPLv3"
 
 # Any additional requirements besides OctoPrint should be listed here
-plugin_requires = ["RPi.GPIO"]
+plugin_requires = ["gpiozero"]
 
 ### --------------------------------------------------------------------------------------------------------------------
 ### More advanced options that you usually shouldn't have to touch follow after this point
